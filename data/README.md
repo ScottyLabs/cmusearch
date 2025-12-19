@@ -7,3 +7,9 @@ This directory contains the scripts to fetch and process the data from the sourc
 Run `scripts/secrets-pull.sh` to pull the secrets from the vault.
 
 Run the scripts from the data directory.
+
+## Running
+
+Run the scripts from the data directory.  You can use the `uv` command to run the scripts.
+
+Like: `uv run rooms.py`

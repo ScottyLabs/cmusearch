@@ -12,8 +12,8 @@ Cargo.lock
 .DS_Store
 .AppleDouble
 .LSOverride
-# Node (if using npm for testing)
-node_modules/
 # Environment
 .env
 .env.local
+# Python
+__pycache__
