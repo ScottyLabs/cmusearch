@@ -1,17 +1,3 @@
-# Rust build artifacts
-/target/
-Cargo.lock
-# WASM build output
-/pkg/
-# IDE
-.idea/
-*.swp
-*.swo
-*~
-# macOS
-.DS_Store
-.AppleDouble
-.LSOverride
 # Environment
 .env
 .env.local

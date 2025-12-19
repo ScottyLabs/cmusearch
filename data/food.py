@@ -30,5 +30,8 @@ client.put_object(
     content_type="application/json",
 )
 
+# Create the json directory if it doesn't exist
+os.makedirs("json", exist_ok=True)
+
 with open("json/food.json", "w") as f:
     f.write(response.text)

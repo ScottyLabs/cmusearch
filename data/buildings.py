@@ -40,6 +40,9 @@ for building_code in building_data:
         # }
     }
 
+# Create the json directory if it doesn't exist
+os.makedirs("json", exist_ok=True)
+
 # Write the processed buildings data to a file
 with open("json/buildings.json", "w") as f:
     json.dump(new_building_data, f)
