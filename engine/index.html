@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CMUSearch</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://api.fontshare.com/v2/css?f[]=satoshi@700,500,400&display=swap" rel="stylesheet">
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: #f5f5f7;
+            min-height: 100vh;
+            color: #1d1d1f;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 4rem 2rem 2rem;
+        }
+
+        h1 {
+            text-align: center;
+            margin-bottom: 2.5rem;
+            font-family: 'Satoshi', sans-serif;
+            font-size: 60px;
+            font-style: normal;
+            font-weight: 700;
+            line-height: 72px;
+            background: linear-gradient(90deg, #0E96D1, #9B7FDB, #DF5069);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            width: fit-content;
+            margin: 0 auto;
+        }
+
+        /* Loading bar */
+        .loading-container {
+            text-align: center;
+            padding: 3rem 2rem;
+        }
+
+        .loading-bar-wrapper {
+            width: 200px;
+            height: 4px;
+            background: #e5e5e5;
+            border-radius: 2px;
+            margin: 0 auto 1rem;
+            overflow: hidden;
+        }
+
+        .loading-bar {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, #0E96D1, #9B7FDB, #DF5069);
+            border-radius: 2px;
+            animation: loading 2s ease-in-out infinite;
+        }
+
+        @keyframes loading {
+            0% {
+                width: 0%;
+                margin-left: 0%;
+            }
+
+            50% {
+                width: 60%;
+                margin-left: 20%;
+            }
+
+            100% {
+                width: 0%;
+                margin-left: 100%;
+            }
+        }
+
+        .loading-text {
+            color: #9ca3af;
+            font-size: 0.9rem;
+        }
+
+        .search-box {
+            display: flex;
+            align-items: center;
+            background: #fff;
+            border-radius: 12px;
+            padding: 0.875rem 1.25rem;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+            margin-bottom: 3rem;
+            border: 1px solid #e5e5e5;
+        }
+
+        .search-icon {
+            color: #9ca3af;
+            margin-right: 0.75rem;
+            flex-shrink: 0;
+        }
+
+        .search-box input {
+            flex: 1;
+            border: none;
+            background: transparent;
+            font-size: 1rem;
+            color: #1d1d1f;
+            outline: none;
+            font-family: inherit;
+        }
+
+        .search-box input::placeholder {
+            color: #9ca3af;
+        }
+
+        .results-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 1.25rem;
+        }
+
+        @media (max-width: 640px) {
+            .results-grid {
+                grid-template-columns: 1fr;
+            }
+
+            h1 {
+                font-size: 40px;
+                line-height: 48px;
+            }
+        }
+
+        .result-card {
+            background: #fff;
+            border-radius: 16px;
+            padding: 1.5rem;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+            border: 1px solid #ebebeb;
+        }
+
+        .result-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            font-size: 0.8rem;
+            font-weight: 500;
+            padding: 0.35rem 0.85rem;
+            border-radius: 20px;
+            margin-bottom: 1rem;
+        }
+
+        .badge-course {
+            background: #f3e8ff;
+            color: #7c3aed;
+        }
+
+        .badge-room {
+            background: #dcfce7;
+            color: #16a34a;
+        }
+
+        .result-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #1d1d1f;
+            margin-bottom: 0.35rem;
+        }
+
+        .result-subtitle {
+            font-size: 0.875rem;
+            color: #6b7280;
+            margin-bottom: 0.75rem;
+        }
+
+        .result-desc {
+            font-size: 0.875rem;
+            color: #9ca3af;
+            line-height: 1.5;
+            margin-bottom: 1rem;
+        }
+
+        .result-button {
+            display: inline-block;
+            background: #1d1d1f;
+            color: #fff;
+            font-size: 0.85rem;
+            font-weight: 500;
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            text-decoration: none;
+            cursor: pointer;
+        }
+
+        .no-results {
+            grid-column: 1 / -1;
+            text-align: center;
+            color: #9ca3af;
+            padding: 3rem;
+        }
+
+        .results-header {
+            display: none;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>CMUSearch</h1>
+
+        <div id="loadingContainer" class="loading-container">
+            <div class="loading-bar-wrapper">
+                <div class="loading-bar"></div>
+            </div>
+            <div class="loading-text">Loading search index...</div>
+        </div>
+
+        <div id="searchContainer" class="hidden">
+            <div class="search-box">
+                <svg class="search-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    stroke-width="2">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+                <input type="text" id="query" placeholder="Search" autofocus>
+            </div>
+
+            <div id="results" class="results-grid"></div>
+        </div>
+    </div>
+
+    <script type="module">
+        import init, { search_docs, get_doc_count, greet } from './pkg/engine.js';
+
+        const loadingContainer = document.getElementById('loadingContainer');
+        const searchContainer = document.getElementById('searchContainer');
+        const queryEl = document.getElementById('query');
+        const resultsEl = document.getElementById('results');
+
+        async function run() {
+            const loadingBar = document.querySelector('.loading-bar');
+            loadingBar.style.animation = 'none';
+            loadingBar.style.width = '0%';
+            loadingBar.style.transition = 'width 0.3s ease';
+
+            try {
+                // Load WASM module
+                loadingBar.style.width = '20%';
+                await init();
+                console.log(greet('WASM'));
+                loadingBar.style.width = '50%';
+
+                // Show search UI immediately (don't block on warmup)
+                await new Promise(r => setTimeout(r, 100)); // Let UI paint
+                loadingBar.style.width = '80%';
+
+                // Quick warmup in background
+                setTimeout(() => search_docs("a", 1), 0);
+
+                await new Promise(r => setTimeout(r, 200));
+                loadingBar.style.width = '100%';
+
+                await new Promise(r => setTimeout(r, 150));
+
+                // Hide loading, show search
+                loadingContainer.classList.add('hidden');
+                searchContainer.classList.remove('hidden');
+                queryEl.focus();
+
+                // Search as you type with debouncing
+                let debounceTimer;
+                queryEl.addEventListener('input', () => {
+                    clearTimeout(debounceTimer);
+                    debounceTimer = setTimeout(performSearch, 100);
+                });
+
+            } catch (err) {
+                loadingContainer.innerHTML = `<div class="loading-text" style="color: #dc2626;">Error: ${err.message}</div>`;
+                console.error(err);
+            }
+        }
+
+        function performSearch() {
+            const query = queryEl.value.trim();
+
+            if (!query) {
+                resultsEl.innerHTML = '';
+                return;
+            }
+
+            const resultsJson = search_docs(query, 20);
+            const results = JSON.parse(resultsJson);
+
+            if (results.length === 0) {
+                resultsEl.innerHTML = '<div class="no-results">No results found</div>';
+            } else {
+                resultsEl.innerHTML = results.map(r => renderResult(r)).join('');
+            }
+        }
+
+        function renderResult(result) {
+            const doc = result.document;
+            if (doc.doc_type === 'Course') {
+                return renderCourse(doc);
+            } else if (doc.doc_type === 'Room') {
+                return renderRoom(doc);
+            }
+            return '';
+        }
+
+        function renderCourse(c) {
+            const desc = truncate(c.desc, 120);
+            return `
+                <div class="result-card">
+                    <div class="result-badge badge-course">📚 Course</div>
+                    <div class="result-title">${escapeHtml(c.name)}</div>
+                    <div class="result-subtitle">${escapeHtml(c.department)}, ${escapeHtml(c.units)} units</div>
+                    <div class="result-desc">${escapeHtml(desc)}</div>
+                    <div class="result-button">${escapeHtml(c.courseID)}</div>
+                </div>`;
+        }
+
+        function renderRoom(r) {
+            const floor = r.floor ? `, Floor ${r.floor.level}` : '';
+            const building = r.floor?.building_code || r.id;
+            return `
+                <div class="result-card">
+                    <div class="result-badge badge-room">🏛️ ${escapeHtml(r.room_type || 'Building')}</div>
+                    <div class="result-title">${escapeHtml(r.full_name || r.name)}</div>
+                    <div class="result-subtitle">${escapeHtml(building)}${floor}</div>
+                    <div class="result-desc">${escapeHtml(r.alias || '')}</div>
+                    <div class="result-button">${escapeHtml(r.id)}</div>
+                </div>`;
+        }
+
+        function truncate(str, len) {
+            if (!str || str.length <= len) return str || '';
+            return str.substring(0, len) + '...';
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        run();
+    </script>
+</body>
+
+</html>
