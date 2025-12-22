@@ -204,6 +204,13 @@
             padding: 3rem;
         }
 
+        .search-time {
+            grid-column: 1 / -1;
+            font-size: 0.85rem;
+            color: #9ca3af;
+            margin-bottom: 1rem;
+        }
+
         .results-header {
             display: none;
         }
@@ -240,12 +247,16 @@
     </div>
 
     <script type="module">
-        import init, { search_docs, get_doc_count, greet } from './pkg/engine.js';
+        import init, { init_engine, search_docs, get_doc_count, is_engine_ready, greet } from './pkg/engine.js';
 
         const loadingContainer = document.getElementById('loadingContainer');
         const searchContainer = document.getElementById('searchContainer');
+        const loadingText = document.querySelector('.loading-text');
         const queryEl = document.getElementById('query');
         const resultsEl = document.getElementById('results');
+
+        // Config path - defines sources and field weights
+        const CONFIG_PATH = './src/default_config.json';
 
         async function run() {
             const loadingBar = document.querySelector('.loading-bar');
@@ -254,25 +265,59 @@
             loadingBar.style.transition = 'width 0.3s ease';
 
             try {
-                // Load WASM module
+                // Step 1: Load WASM module
+                loadingText.textContent = 'Loading search engine...';
                 loadingBar.style.width = '20%';
                 await init();
                 console.log(greet('WASM'));
+
+                // Step 2: Fetch config to get source URLs and field weights
+                loadingText.textContent = 'Loading configuration...';
+                loadingBar.style.width = '30%';
+
+                const configResponse = await fetch(CONFIG_PATH);
+                if (!configResponse.ok) {
+                    throw new Error(`Failed to fetch config: ${configResponse.status}`);
+                }
+                const config = await configResponse.json();
+
+                // Step 3: Fetch all document sources in parallel
+                loadingText.textContent = 'Fetching documents...';
                 loadingBar.style.width = '50%';
 
-                // Show search UI immediately (don't block on warmup)
-                await new Promise(r => setTimeout(r, 100)); // Let UI paint
-                loadingBar.style.width = '80%';
+                const sourceIds = Object.keys(config);
+                const fetchPromises = sourceIds.map(async (sourceId) => {
+                    const { url } = config[sourceId];
+                    try {
+                        const response = await fetch(`./src${url.substring(1)}`); // ./documents/... -> ./src/documents/...
+                        if (!response.ok) {
+                            console.warn(`Failed to fetch ${url}: ${response.status}`);
+                            return [sourceId, {}];
+                        }
+                        const data = await response.json();
+                        return [sourceId, data];
+                    } catch (e) {
+                        console.warn(`Error fetching ${url}:`, e);
+                        return [sourceId, {}];
+                    }
+                });
 
-                // Quick warmup in background
-                setTimeout(() => search_docs("a", 1), 0);
+                const docEntries = await Promise.all(fetchPromises);
+                const sources = Object.fromEntries(docEntries);
 
-                await new Promise(r => setTimeout(r, 200));
+                loadingText.textContent = 'Building search index...';
+                loadingBar.style.width = '70%';
+
+                // Step 4: Initialize the search engine with documents and config
+                loadingBar.style.width = '85%';
+                init_engine(JSON.stringify(sources), JSON.stringify(config));
+
+                console.log(`Engine initialized with ${get_doc_count()} documents`);
+
+                // Step 5: Done - show search UI
                 loadingBar.style.width = '100%';
-
                 await new Promise(r => setTimeout(r, 150));
 
-                // Hide loading, show search
                 loadingContainer.classList.add('hidden');
                 searchContainer.classList.remove('hidden');
                 queryEl.focus();
@@ -298,48 +343,65 @@
                 return;
             }
 
+            const startTime = performance.now();
             const resultsJson = search_docs(query, 20);
+            const searchTime = (performance.now() - startTime).toFixed(2);
+
+            console.log(`Search completed in ${searchTime}ms`);
             const results = JSON.parse(resultsJson);
+            console.log(results);
 
             if (results.length === 0) {
                 resultsEl.innerHTML = '<div class="no-results">No results found</div>';
             } else {
-                resultsEl.innerHTML = results.map(r => renderResult(r)).join('');
+                resultsEl.innerHTML = `<div class="search-time">Found ${results.length} results in ${searchTime}ms</div>` +
+                    results.map(r => renderResult(r)).join('');
             }
         }
 
         function renderResult(result) {
             const doc = result.document;
-            if (doc.doc_type === 'Course') {
+            const source = doc.courseID ? 'courses' : doc.nameWithSpace ? 'rooms' : 'buildings';
+            if (source === 'courses') {
                 return renderCourse(doc);
-            } else if (doc.doc_type === 'Room') {
+            } else if (source === 'rooms' || source === 'buildings') {
                 return renderRoom(doc);
             }
-            return '';
+            // Fallback: render as generic card
+            return renderGeneric(doc);
         }
 
         function renderCourse(c) {
-            const desc = truncate(c.desc, 120);
+            const desc = truncate(c.desc || c.description || '', 120);
             return `
                 <div class="result-card">
                     <div class="result-badge badge-course">📚 Course</div>
                     <div class="result-title">${escapeHtml(c.name)}</div>
-                    <div class="result-subtitle">${escapeHtml(c.department)}, ${escapeHtml(c.units)} units</div>
+                    <div class="result-subtitle">${escapeHtml(c.department || '')}, ${escapeHtml(c.units || '')} units</div>
                     <div class="result-desc">${escapeHtml(desc)}</div>
                     <div class="result-button">${escapeHtml(c.courseID)}</div>
                 </div>`;
         }
 
         function renderRoom(r) {
-            const floor = r.floor ? `, Floor ${r.floor.level}` : '';
-            const building = r.floor?.building_code || r.id;
+            const floor = r.floor ? `, Floor ${r.floor}` : '';
+            const building = r.building || r.building_code || '';
             return `
                 <div class="result-card">
-                    <div class="result-badge badge-room">🏛️ ${escapeHtml(r.room_type || 'Building')}</div>
-                    <div class="result-title">${escapeHtml(r.full_name || r.name)}</div>
-                    <div class="result-subtitle">${escapeHtml(building)}${floor}</div>
+                    <div class="result-badge badge-room">🏛️ ${escapeHtml(r.type)}</div>
+                    <div class="result-title">${escapeHtml(r.nameWithSpace || r.name || r.id)}</div>
                     <div class="result-desc">${escapeHtml(r.alias || '')}</div>
-                    <div class="result-button">${escapeHtml(r.id)}</div>
+                </div>`;
+        }
+
+        function renderGeneric(doc) {
+            const title = doc.name || doc.title || doc.id || 'Unknown';
+            const desc = truncate(doc.description || doc.desc || '', 120);
+            return `
+                <div class="result-card">
+                    <div class="result-badge badge-room">📄 ${escapeHtml(doc.source || 'Item')}</div>
+                    <div class="result-title">${escapeHtml(title)}</div>
+                    <div class="result-desc">${escapeHtml(desc)}</div>
                 </div>`;
         }
 

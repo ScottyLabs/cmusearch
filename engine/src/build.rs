@@ -1,85 +1,51 @@
-use crate::parse::text_to_trigrams;
-use crate::types::{
-    Course, CourseStore, Document, DocumentStore, InvertedIndex, RoomDocument, RoomStore,
-};
 use std::collections::HashMap;
 
-/// Get searchable text from a Course
-fn course_searchable_text(course: &Course) -> String {
-    format!(
-        "{} {} {} {}",
-        course.course_id, course.name, course.desc, course.department
-    )
-}
-
-/// Get searchable text from a RoomDocument
-fn room_searchable_text(room: &RoomDocument) -> String {
-    format!(
-        "{} {} {} {}",
-        room.name, room.full_name, room.alias, room.room_type
-    )
-}
-
-/// Get searchable text from a Document
-pub fn document_searchable_text(doc: &Document) -> String {
-    match doc {
-        Document::Course(c) => course_searchable_text(c),
-        Document::Room(r) => room_searchable_text(r),
-    }
-}
+use crate::{
+    parse::doc_to_ngrams_map,
+    types::{DocumentLengths, InvertedIndex, SourcesStore},
+};
 
 /// Build inverted index from documents
-/// Maps each trigram to list of (doc_id, term_frequency) pairs
-pub fn build_index(docs: &DocumentStore) -> InvertedIndex {
+/// Maps each 4-gram to list of (source_id, doc_id, term_frequency, field_name) pairs
+pub fn build_sources_index(sources: &SourcesStore) -> (InvertedIndex, DocumentLengths) {
     let mut index: InvertedIndex = HashMap::new();
+    let mut doc_lengths: DocumentLengths = HashMap::new();
 
-    for (doc_id, doc) in docs {
-        let searchable_text = document_searchable_text(doc);
+    for (source_id, docs) in sources {
+        for (doc_id, doc_fields) in docs {
+            // Generate 4-grams for each field and count frequencies
+            let doc_ngrams = doc_to_ngrams_map(doc_fields);
 
-        // Generate trigrams and count frequencies
-        let trigrams = text_to_trigrams(&searchable_text);
-        let mut term_freqs: HashMap<String, u16> = HashMap::new();
+            for (field_name, field_ngrams) in &doc_ngrams {
+                // Count term frequencies for this field
+                let mut term_freq: HashMap<String, u16> = HashMap::new();
+                for ngram in field_ngrams {
+                    *term_freq.entry(ngram.clone()).or_insert(0) += 1;
+                }
 
-        for trigram in trigrams {
-            *term_freqs.entry(trigram).or_insert(0) += 1;
-        }
+                // Record document length for this field
+                doc_lengths
+                    .entry(doc_id.clone())
+                    .or_insert_with(HashMap::new)
+                    .insert(field_name.clone(), field_ngrams.len() as u16);
 
-        // Add to inverted index
-        for (term, freq) in term_freqs {
-            index
-                .entry(term)
-                .or_insert_with(Vec::new)
-                .push((doc_id.clone(), freq));
+                // Skip empty fields (no ngrams generated)
+                if field_ngrams.is_empty() {
+                    continue;
+                }
+
+                // Index each unique ngram in this field
+                for (ngram, &freq) in &term_freq {
+                    index.entry(ngram.clone()).or_insert_with(Vec::new).push((
+                        source_id.clone(),
+                        doc_id.clone(),
+                        freq,
+                        field_name.clone(),
+                    ));
+                }
+            }
         }
     }
 
-    index
-}
-
-/// Calculate the number of trigrams in a document (for doc length)
-pub fn get_doc_length(doc: &Document) -> u16 {
-    let searchable_text = document_searchable_text(doc);
-    text_to_trigrams(&searchable_text).len() as u16
-}
-
-/// Convert CourseStore to DocumentStore
-pub fn courses_to_docs(courses: CourseStore) -> DocumentStore {
-    courses
-        .into_iter()
-        .map(|(id, c)| (format!("course:{}", id), Document::Course(c)))
-        .collect()
-}
-
-/// Convert RoomStore to DocumentStore
-pub fn rooms_to_docs(rooms: RoomStore) -> DocumentStore {
-    rooms
-        .into_iter()
-        .map(|(id, r)| (format!("room:{}", id), Document::Room(r)))
-        .collect()
-}
-
-/// Merge two document stores
-pub fn merge_docs(mut a: DocumentStore, b: DocumentStore) -> DocumentStore {
-    a.extend(b);
-    a
+    (index, doc_lengths)
 }

@@ -48,6 +48,9 @@ for building_code in rooms_data:
                 # "numTerms":
             }
 
+# Create the json directory if it doesn't exist
+os.makedirs("json", exist_ok=True)
+
 # Write the processed buildings data to a file
 with open("json/rooms.json", "w") as f:
     json.dump(new_rooms_data, f)

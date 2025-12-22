@@ -1,0 +1,20 @@
+{
+    "courses": {
+        "url": "./documents/courses.json",
+        "weights": {
+            "name": 0.2,
+            "desc": 0.1,
+            "courseID": 0.6,
+            "department": 0.1
+        }
+    },
+    "rooms": {
+        "url": "./documents/roomDocuments.json",
+        "weights": {
+            "nameWithSpace": 0.4,
+            "type": 0.2,
+            "alias": 0.4,
+            "floor": 0.2
+        }
+    }
+}

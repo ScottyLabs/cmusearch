@@ -17,3 +17,5 @@ node_modules/
 # Environment
 .env
 .env.local
+
+documents/**

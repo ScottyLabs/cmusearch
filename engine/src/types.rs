@@ -1,59 +1,14 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Course data structure matching courses.json format
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Course {
-    #[serde(rename = "courseID")]
-    pub course_id: String,
-    pub name: String,
-    pub desc: String,
-    pub department: String,
-    pub units: String,
-    #[serde(default)]
-    pub prereqs: Vec<String>,
-    #[serde(rename = "prereqString", default)]
-    pub prereq_string: String,
-    #[serde(default)]
-    pub coreqs: Vec<String>,
-    #[serde(default)]
-    pub crosslisted: Vec<String>,
-}
+/// Document: field_name -> field_value
+pub type Document = HashMap<String, String>;
 
-/// Floor info for room documents
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Floor {
-    #[serde(rename = "buildingCode", default)]
-    pub building_code: String,
-    #[serde(default)]
-    pub level: String,
-}
+/// Document store: document_id -> Document
+pub type DocumentStore = HashMap<String, Document>;
 
-/// Room/Building document matching roomDocuments.json format
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RoomDocument {
-    pub id: String,
-    #[serde(rename = "nameWithSpace", default)]
-    pub name: String,
-    #[serde(rename = "fullNameWithSpace", default)]
-    pub full_name: String,
-    #[serde(rename = "type", default)]
-    pub room_type: String,
-    #[serde(default)]
-    pub alias: String,
-    #[serde(rename = "numTerms", default)]
-    pub num_terms: u16,
-    #[serde(default)]
-    pub floor: Option<Floor>,
-}
-
-/// Unified document enum for search results
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "doc_type")]
-pub enum Document {
-    Course(Course),
-    Room(RoomDocument),
-}
+/// Sources store: source_id -> DocumentStore
+pub type SourcesStore = HashMap<String, DocumentStore>;
 
 /// Search result with document info and relevance score
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,14 +17,27 @@ pub struct SearchResult {
     pub score: f32,
 }
 
-/// Inverted index: term -> list of (document_id, term_frequency)
-pub type InvertedIndex = HashMap<String, Vec<(String, u16)>>;
+/// Document lengths: document_id -> field_name -> length
+pub type DocumentLengths = HashMap<String, HashMap<String, u16>>;
 
-/// Document store: document_id -> Document
-pub type DocumentStore = HashMap<String, Document>;
+/// Inverted index: term -> list of (source_id, document_id, term_frequency, field_name)
+pub type InvertedIndex = HashMap<String, Vec<(String, String, u16, String)>>;
 
-/// Course store: document_id -> Course
-pub type CourseStore = HashMap<String, Course>;
+/// Field weights: field_name -> weight
+pub type FieldWeights = HashMap<String, f32>;
 
-/// Room store: document_id -> RoomDocument
-pub type RoomStore = HashMap<String, RoomDocument>;
+/// Source config: url and field weights
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceConfig {
+    pub url: String,
+    pub weights: FieldWeights,
+}
+
+/// Sources config: source_id -> SourceConfig
+pub type SourcesConfig = HashMap<String, SourceConfig>;
+
+/// Document ID tuple: (source_id, document_id, field_name)
+pub type FieldPath = (String, String, String);
+
+/// Document scores ordered tuple: (score, field_path)
+pub type DocumentScore = (f32, FieldPath);
