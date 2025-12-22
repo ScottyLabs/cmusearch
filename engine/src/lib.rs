@@ -160,6 +160,63 @@ pub fn init_engine(docs_json: &str, config_json: &str) -> Result<(), JsError> {
     Ok(())
 }
 
+/// Get the cachable index data as JSON for IndexedDB storage
+/// Returns the expensive-to-compute index data that can be cached
+#[wasm_bindgen]
+pub fn get_cachable_index() -> Result<String, JsError> {
+    ENGINE.with(|engine| {
+        let engine_ref = engine.borrow();
+        match engine_ref.as_ref() {
+            Some(eng) => {
+                let cachable = types::CachableIndex {
+                    index: eng.index.clone(),
+                    doc_lengths: eng.doc_lengths.clone(),
+                    avg_doc_length: eng.avg_doc_length,
+                    num_docs: eng.num_docs,
+                };
+                serde_json::to_string(&cachable)
+                    .map_err(|e| JsError::new(&format!("Failed to serialize index: {}", e)))
+            }
+            None => Err(JsError::new(
+                "Engine not initialized. Call init_engine first.",
+            )),
+        }
+    })
+}
+
+/// Initialize the search engine from cached index data
+/// cached_json: JSON string of CachableIndex (from get_cachable_index)
+/// docs_json: JSON string of SourcesStore (still needed for result lookups)
+/// config_json: JSON string of SourcesConfig (for field weights during search)
+#[wasm_bindgen]
+pub fn init_engine_from_cache(
+    cached_json: &str,
+    docs_json: &str,
+    config_json: &str,
+) -> Result<(), JsError> {
+    let cached: types::CachableIndex = serde_json::from_str(cached_json)
+        .map_err(|e| JsError::new(&format!("Failed to parse cached index: {}", e)))?;
+
+    let sources: SourcesStore = serde_json::from_str(docs_json)
+        .map_err(|e| JsError::new(&format!("Failed to parse documents: {}", e)))?;
+
+    let sources_config: SourcesConfig = serde_json::from_str(config_json)
+        .map_err(|e| JsError::new(&format!("Failed to parse config: {}", e)))?;
+
+    ENGINE.with(|engine| {
+        *engine.borrow_mut() = Some(SearchEngine {
+            sources,
+            index: cached.index,
+            doc_lengths: cached.doc_lengths,
+            avg_doc_length: cached.avg_doc_length,
+            num_docs: cached.num_docs,
+            sources_config,
+        });
+    });
+
+    Ok(())
+}
+
 /// Check if the engine has been initialized
 #[wasm_bindgen]
 pub fn is_engine_ready() -> bool {

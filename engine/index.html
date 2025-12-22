@@ -247,7 +247,7 @@
     </div>
 
     <script type="module">
-        import init, { init_engine, search_docs, get_doc_count, is_engine_ready, greet } from './pkg/engine.js';
+        import init, { init_engine, init_engine_from_cache, get_cachable_index, search_docs, get_doc_count, is_engine_ready, greet } from './pkg/engine.js';
 
         const loadingContainer = document.getElementById('loadingContainer');
         const searchContainer = document.getElementById('searchContainer');
@@ -257,6 +257,81 @@
 
         // Config path - defines sources and field weights
         const CONFIG_PATH = './src/default_config.json';
+        const DB_NAME = 'cmusearch-cache';
+        const STORE_NAME = 'index-cache';
+        const DB_VERSION = 1;
+
+        // ========== IndexedDB Cache Helpers ==========
+
+        async function hashConfig(configJson) {
+            // Use SubtleCrypto for fast hashing
+            const encoder = new TextEncoder();
+            const data = encoder.encode(configJson);
+            const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+
+        function openCacheDB() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(DB_NAME, DB_VERSION);
+                request.onerror = () => reject(request.error);
+                request.onsuccess = () => resolve(request.result);
+                request.onupgradeneeded = (event) => {
+                    const db = event.target.result;
+                    if (!db.objectStoreNames.contains(STORE_NAME)) {
+                        db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+                    }
+                };
+            });
+        }
+
+        async function getCachedData(configHash) {
+            try {
+                const db = await openCacheDB();
+                console.log('[cache] Checking IndexedDB for cached data: connected');
+                return new Promise((resolve, reject) => {
+                    const tx = db.transaction(STORE_NAME, 'readonly');
+                    const store = tx.objectStore(STORE_NAME);
+                    const request = store.get('main');
+                    request.onsuccess = () => {
+                        const result = request.result;
+                        if (result && result.configHash === configHash) {
+                            resolve(result);
+                        } else {
+                            resolve(null); // Cache miss or version mismatch
+                        }
+                    };
+                    request.onerror = () => resolve(null);
+                });
+            } catch (e) {
+                console.warn('IndexedDB unavailable:', e);
+                return null;
+            }
+        }
+
+        async function setCachedData(configHash, indexData, sourcesData) {
+            try {
+                const db = await openCacheDB();
+                return new Promise((resolve, reject) => {
+                    const tx = db.transaction(STORE_NAME, 'readwrite');
+                    const store = tx.objectStore(STORE_NAME);
+                    store.put({
+                        id: 'main',
+                        configHash,
+                        indexData,
+                        sourcesData,
+                        timestamp: Date.now()
+                    });
+                    tx.oncomplete = () => resolve();
+                    tx.onerror = () => reject(tx.error);
+                });
+            } catch (e) {
+                console.warn('Failed to cache data:', e);
+            }
+        }
+
+        // ========== Main Initialization ==========
 
         async function run() {
             const loadingBar = document.querySelector('.loading-bar');
@@ -271,7 +346,7 @@
                 await init();
                 console.log(greet('WASM'));
 
-                // Step 2: Fetch config to get source URLs and field weights
+                // Step 2: Fetch config
                 loadingText.textContent = 'Loading configuration...';
                 loadingBar.style.width = '30%';
 
@@ -280,41 +355,89 @@
                     throw new Error(`Failed to fetch config: ${configResponse.status}`);
                 }
                 const config = await configResponse.json();
+                const configJson = JSON.stringify(config);
+                const configHash = await hashConfig(configJson);
 
-                // Step 3: Fetch all document sources in parallel
-                loadingText.textContent = 'Fetching documents...';
-                loadingBar.style.width = '50%';
+                console.log(`[cache] Config hash: ${configHash.substring(0, 16)}...`);
 
-                const sourceIds = Object.keys(config);
-                const fetchPromises = sourceIds.map(async (sourceId) => {
-                    const { url } = config[sourceId];
-                    try {
-                        const response = await fetch(`./src${url.substring(1)}`); // ./documents/... -> ./src/documents/...
-                        if (!response.ok) {
-                            console.warn(`Failed to fetch ${url}: ${response.status}`);
+                // Step 3: Check cache
+                loadingText.textContent = 'Checking cache...';
+                loadingBar.style.width = '40%';
+
+                const cached = await getCachedData(configHash);
+
+                if (cached) {
+                    // Cache hit! Restore from cache
+                    console.log(`[cache] Cache hit! Restoring from cache (saved ${new Date(cached.timestamp).toLocaleString()})`);
+                    loadingText.textContent = 'Loading cached index...';
+                    loadingBar.style.width = '70%';
+
+                    const startRestore = performance.now();
+                    init_engine_from_cache(cached.indexData, cached.sourcesData, configJson);
+                    const restoreTime = (performance.now() - startRestore).toFixed(0);
+
+                    console.log(`[cache] Engine restored from cache in ${restoreTime}ms`);
+                } else {
+                    // Cache miss - fetch documents and build index
+                    console.log('[cache] Cache miss, building index...');
+                    loadingText.textContent = 'Fetching documents...';
+                    loadingBar.style.width = '50%';
+
+                    const sourceIds = Object.keys(config);
+                    console.log(`[cache] Fetching ${sourceIds.length} sources:`, sourceIds);
+
+                    const fetchPromises = sourceIds.map(async (sourceId) => {
+                        const { url } = config[sourceId];
+                        const fetchUrl = url;
+                        console.log(`[cache] Fetching ${sourceId} from ${fetchUrl}`);
+                        try {
+                            const response = await fetch(fetchUrl);
+                            if (!response.ok) {
+                                console.warn(`[cache] Failed to fetch ${fetchUrl}: ${response.status}`);
+                                return [sourceId, {}];
+                            }
+                            const data = await response.json();
+                            const docCount = Object.keys(data).length;
+                            console.log(`[cache] Loaded ${sourceId}: ${docCount} documents`);
+                            return [sourceId, data];
+                        } catch (e) {
+                            console.warn(`[cache] Error fetching ${fetchUrl}:`, e);
                             return [sourceId, {}];
                         }
-                        const data = await response.json();
-                        return [sourceId, data];
-                    } catch (e) {
-                        console.warn(`Error fetching ${url}:`, e);
-                        return [sourceId, {}];
-                    }
-                });
+                    });
 
-                const docEntries = await Promise.all(fetchPromises);
-                const sources = Object.fromEntries(docEntries);
+                    const docEntries = await Promise.all(fetchPromises);
+                    const sources = Object.fromEntries(docEntries);
+                    const sourcesJson = JSON.stringify(sources);
 
-                loadingText.textContent = 'Building search index...';
-                loadingBar.style.width = '70%';
+                    // Log total document count
+                    const totalDocs = Object.values(sources).reduce((sum, docs) => sum + Object.keys(docs).length, 0);
+                    console.log(`[cache] Total documents fetched: ${totalDocs}`);
 
-                // Step 4: Initialize the search engine with documents and config
-                loadingBar.style.width = '85%';
-                init_engine(JSON.stringify(sources), JSON.stringify(config));
+                    loadingText.textContent = 'Building search index...';
+                    loadingBar.style.width = '70%';
+
+                    const startBuild = performance.now();
+                    init_engine(sourcesJson, configJson);
+                    const buildTime = (performance.now() - startBuild).toFixed(0);
+
+                    console.log(`[cache] Index built in ${buildTime}ms`);
+
+                    // Cache the built index for next time
+                    loadingText.textContent = 'Caching index...';
+                    loadingBar.style.width = '85%';
+
+                    const indexData = get_cachable_index();
+                    console.log(`[cache] Index data size: ${(indexData.length / 1024).toFixed(1)}KB`);
+                    console.log(`[cache] Sources data size: ${(sourcesJson.length / 1024).toFixed(1)}KB`);
+
+                    await setCachedData(configHash, indexData, sourcesJson);
+                    console.log('[cache] Index cached to IndexedDB');
+                }
 
                 console.log(`Engine initialized with ${get_doc_count()} documents`);
 
-                // Step 5: Done - show search UI
+                // Done - show search UI
                 loadingBar.style.width = '100%';
                 await new Promise(r => setTimeout(r, 150));
 

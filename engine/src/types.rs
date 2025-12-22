@@ -41,3 +41,12 @@ pub type FieldPath = (String, String, String);
 
 /// Document scores ordered tuple: (score, field_path)
 pub type DocumentScore = (f32, FieldPath);
+
+/// Cachable index data for IndexedDB storage
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CachableIndex {
+    pub index: InvertedIndex,
+    pub doc_lengths: DocumentLengths,
+    pub avg_doc_length: f32,
+    pub num_docs: u16,
+}
