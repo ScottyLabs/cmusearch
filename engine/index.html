@@ -247,216 +247,63 @@
     </div>
 
     <script type="module">
-        import init, { init_engine, init_engine_from_cache, get_cachable_index, search_docs, get_doc_count, is_engine_ready, greet } from './pkg/engine.js';
-
         const loadingContainer = document.getElementById('loadingContainer');
         const searchContainer = document.getElementById('searchContainer');
         const loadingText = document.querySelector('.loading-text');
         const queryEl = document.getElementById('query');
         const resultsEl = document.getElementById('results');
 
-        // Config path - defines sources and field weights
-        const CONFIG_PATH = './src/default_config.json';
-        const DB_NAME = 'cmusearch-cache';
-        const STORE_NAME = 'index-cache';
-        const DB_VERSION = 1;
+        let workerPort = null;
 
-        // ========== IndexedDB Cache Helpers ==========
+        // ========== Shared Worker Communication ==========
 
-        async function hashConfig(configJson) {
-            // Use SubtleCrypto for fast hashing
-            const encoder = new TextEncoder();
-            const data = encoder.encode(configJson);
-            const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-            const hashArray = Array.from(new Uint8Array(hashBuffer));
-            return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-        }
-
-        function openCacheDB() {
+        function connectToWorker() {
             return new Promise((resolve, reject) => {
-                const request = indexedDB.open(DB_NAME, DB_VERSION);
-                request.onerror = () => reject(request.error);
-                request.onsuccess = () => resolve(request.result);
-                request.onupgradeneeded = (event) => {
-                    const db = event.target.result;
-                    if (!db.objectStoreNames.contains(STORE_NAME)) {
-                        db.createObjectStore(STORE_NAME, { keyPath: 'id' });
-                    }
-                };
+                try {
+                    // Create shared worker with module type
+                    const worker = new SharedWorker('./search-worker.js', {
+                        type: 'module',
+                        name: 'cmusearch-engine'
+                    });
+                    workerPort = worker.port;
+
+                    workerPort.onmessage = null; // Will be set per-request
+                    workerPort.start();
+
+                    console.log('[Main] Connected to Shared Worker');
+                    resolve(workerPort);
+                } catch (err) {
+                    reject(err);
+                }
             });
         }
 
-        async function getCachedData(configHash) {
-            try {
-                const db = await openCacheDB();
-                console.log('[cache] Checking IndexedDB for cached data: connected');
-                return new Promise((resolve, reject) => {
-                    const tx = db.transaction(STORE_NAME, 'readonly');
-                    const store = tx.objectStore(STORE_NAME);
-                    const request = store.get('main');
-                    request.onsuccess = () => {
-                        const result = request.result;
-                        if (result && result.configHash === configHash) {
-                            resolve(result);
-                        } else {
-                            resolve(null); // Cache miss or version mismatch
-                        }
-                    };
-                    request.onerror = () => resolve(null);
-                });
-            } catch (e) {
-                console.warn('IndexedDB unavailable:', e);
-                return null;
-            }
-        }
-
-        async function setCachedData(configHash, indexData, sourcesData) {
-            try {
-                const db = await openCacheDB();
-                return new Promise((resolve, reject) => {
-                    const tx = db.transaction(STORE_NAME, 'readwrite');
-                    const store = tx.objectStore(STORE_NAME);
-                    store.put({
-                        id: 'main',
-                        configHash,
-                        indexData,
-                        sourcesData,
-                        timestamp: Date.now()
-                    });
-                    tx.oncomplete = () => resolve();
-                    tx.onerror = () => reject(tx.error);
-                });
-            } catch (e) {
-                console.warn('Failed to cache data:', e);
-            }
-        }
-
-        // ========== Main Initialization ==========
-
-        async function run() {
-            const loadingBar = document.querySelector('.loading-bar');
-            loadingBar.style.animation = 'none';
-            loadingBar.style.width = '0%';
-            loadingBar.style.transition = 'width 0.3s ease';
-
-            try {
-                // Step 1: Load WASM module
-                loadingText.textContent = 'Loading search engine...';
-                loadingBar.style.width = '20%';
-                await init();
-                console.log(greet('WASM'));
-
-                // Step 2: Fetch config
-                loadingText.textContent = 'Loading configuration...';
-                loadingBar.style.width = '30%';
-
-                const configResponse = await fetch(CONFIG_PATH);
-                if (!configResponse.ok) {
-                    throw new Error(`Failed to fetch config: ${configResponse.status}`);
-                }
-                const config = await configResponse.json();
-                const configJson = JSON.stringify(config);
-                const configHash = await hashConfig(configJson);
-
-                console.log(`[cache] Config hash: ${configHash.substring(0, 16)}...`);
-
-                // Step 3: Check cache
-                loadingText.textContent = 'Checking cache...';
-                loadingBar.style.width = '40%';
-
-                const cached = await getCachedData(configHash);
-
-                if (cached) {
-                    // Cache hit! Restore from cache
-                    console.log(`[cache] Cache hit! Restoring from cache (saved ${new Date(cached.timestamp).toLocaleString()})`);
-                    loadingText.textContent = 'Loading cached index...';
-                    loadingBar.style.width = '70%';
-
-                    const startRestore = performance.now();
-                    init_engine_from_cache(cached.indexData, cached.sourcesData, configJson);
-                    const restoreTime = (performance.now() - startRestore).toFixed(0);
-
-                    console.log(`[cache] Engine restored from cache in ${restoreTime}ms`);
-                } else {
-                    // Cache miss - fetch documents and build index
-                    console.log('[cache] Cache miss, building index...');
-                    loadingText.textContent = 'Fetching documents...';
-                    loadingBar.style.width = '50%';
-
-                    const sourceIds = Object.keys(config);
-                    console.log(`[cache] Fetching ${sourceIds.length} sources:`, sourceIds);
-
-                    const fetchPromises = sourceIds.map(async (sourceId) => {
-                        const { url } = config[sourceId];
-                        const fetchUrl = url;
-                        console.log(`[cache] Fetching ${sourceId} from ${fetchUrl}`);
-                        try {
-                            const response = await fetch(fetchUrl);
-                            if (!response.ok) {
-                                console.warn(`[cache] Failed to fetch ${fetchUrl}: ${response.status}`);
-                                return [sourceId, {}];
-                            }
-                            const data = await response.json();
-                            const docCount = Object.keys(data).length;
-                            console.log(`[cache] Loaded ${sourceId}: ${docCount} documents`);
-                            return [sourceId, data];
-                        } catch (e) {
-                            console.warn(`[cache] Error fetching ${fetchUrl}:`, e);
-                            return [sourceId, {}];
-                        }
-                    });
-
-                    const docEntries = await Promise.all(fetchPromises);
-                    const sources = Object.fromEntries(docEntries);
-                    const sourcesJson = JSON.stringify(sources);
-
-                    // Log total document count
-                    const totalDocs = Object.values(sources).reduce((sum, docs) => sum + Object.keys(docs).length, 0);
-                    console.log(`[cache] Total documents fetched: ${totalDocs}`);
-
-                    loadingText.textContent = 'Building search index...';
-                    loadingBar.style.width = '70%';
-
-                    const startBuild = performance.now();
-                    init_engine(sourcesJson, configJson);
-                    const buildTime = (performance.now() - startBuild).toFixed(0);
-
-                    console.log(`[cache] Index built in ${buildTime}ms`);
-
-                    // Cache the built index for next time
-                    loadingText.textContent = 'Caching index...';
-                    loadingBar.style.width = '85%';
-
-                    const indexData = get_cachable_index();
-                    console.log(`[cache] Index data size: ${(indexData.length / 1024).toFixed(1)}KB`);
-                    console.log(`[cache] Sources data size: ${(sourcesJson.length / 1024).toFixed(1)}KB`);
-
-                    await setCachedData(configHash, indexData, sourcesJson);
-                    console.log('[cache] Index cached to IndexedDB');
+        function sendToWorker(message) {
+            return new Promise((resolve, reject) => {
+                if (!workerPort) {
+                    return reject(new Error('Worker not connected'));
                 }
 
-                console.log(`Engine initialized with ${get_doc_count()} documents`);
-
-                // Done - show search UI
-                loadingBar.style.width = '100%';
-                await new Promise(r => setTimeout(r, 150));
-
-                loadingContainer.classList.add('hidden');
-                searchContainer.classList.remove('hidden');
-                queryEl.focus();
-
-                // Search as you type with debouncing
-                let debounceTimer;
-                queryEl.addEventListener('input', () => {
-                    clearTimeout(debounceTimer);
-                    debounceTimer = setTimeout(performSearch, 100);
-                });
-
-            } catch (err) {
-                loadingContainer.innerHTML = `<div class="loading-text" style="color: #dc2626;">Error: ${err.message}</div>`;
-                console.error(err);
-            }
+                const handler = (event) => {
+                    workerPort.removeEventListener('message', handler);
+                    resolve(event.data);
+                };
+                workerPort.addEventListener('message', handler);
+                workerPort.postMessage(message);
+            });
         }
+
+        // ========== Search via Shared Worker ==========
+
+        async function searchViaWorker(query, n = 20) {
+            const response = await sendToWorker({ type: 'search', query, n });
+            if (response.type === 'searchError') {
+                throw new Error(response.error);
+            }
+            return { results: response.results, duration: response.duration };
+        }
+
+        // ========== UI Functions ==========
 
         function performSearch() {
             const query = queryEl.value.trim();
@@ -467,30 +314,30 @@
             }
 
             const startTime = performance.now();
-            const resultsJson = search_docs(query, 20);
-            const searchTime = (performance.now() - startTime).toFixed(2);
+            searchViaWorker(query, 20)
+                .then(({ results: resultsJson, duration }) => {
+                    const results = JSON.parse(resultsJson);
+                    const totalTime = (performance.now() - startTime).toFixed(2);
+                    console.log(`Search: ${duration}ms (worker) + ${(totalTime - parseFloat(duration)).toFixed(2)}ms (render)`);
 
-            console.log(`Search completed in ${searchTime}ms`);
-            const results = JSON.parse(resultsJson);
-            console.log(results);
-
-            if (results.length === 0) {
-                resultsEl.innerHTML = '<div class="no-results">No results found</div>';
-            } else {
-                resultsEl.innerHTML = `<div class="search-time">Found ${results.length} results in ${searchTime}ms</div>` +
-                    results.map(r => renderResult(r)).join('');
-            }
+                    if (results.length === 0) {
+                        resultsEl.innerHTML = '<div class="no-results">No results found</div>';
+                    } else {
+                        resultsEl.innerHTML = `<div class="search-time">Found ${results.length} results in ${duration}ms</div>` +
+                            results.map(r => renderResult(r)).join('');
+                    }
+                })
+                .catch((err) => {
+                    console.error('Search error:', err);
+                    resultsEl.innerHTML = `<div class="no-results">Search error: ${err.message}</div>`;
+                });
         }
 
         function renderResult(result) {
             const doc = result.document;
             const source = doc.courseID ? 'courses' : doc.nameWithSpace ? 'rooms' : 'buildings';
-            if (source === 'courses') {
-                return renderCourse(doc);
-            } else if (source === 'rooms' || source === 'buildings') {
-                return renderRoom(doc);
-            }
-            // Fallback: render as generic card
+            if (source === 'courses') return renderCourse(doc);
+            if (source === 'rooms' || source === 'buildings') return renderRoom(doc);
             return renderGeneric(doc);
         }
 
@@ -507,8 +354,6 @@
         }
 
         function renderRoom(r) {
-            const floor = r.floor ? `, Floor ${r.floor}` : '';
-            const building = r.building || r.building_code || '';
             return `
                 <div class="result-card">
                     <div class="result-badge badge-room">🏛️ ${escapeHtml(r.type)}</div>
@@ -538,6 +383,48 @@
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
+        }
+
+        // ========== Main Initialization ==========
+
+        async function run() {
+            const loadingBar = document.querySelector('.loading-bar');
+            loadingBar.style.animation = 'none';
+            loadingBar.style.width = '0%';
+            loadingBar.style.transition = 'width 0.3s ease';
+
+            try {
+                // Step 1: Connect to Shared Worker
+                loadingText.textContent = 'Connecting to search worker...';
+                loadingBar.style.width = '20%';
+                await connectToWorker();
+
+                // Step 2: Wait for engine initialization in worker
+                loadingText.textContent = 'Initializing search engine...';
+                loadingBar.style.width = '50%';
+
+                const initResult = await sendToWorker({ type: 'init' });
+                console.log(`[Main] Engine ready with ${initResult.docCount} documents`);
+
+                loadingBar.style.width = '100%';
+                await new Promise(r => setTimeout(r, 150));
+
+                // Show search UI
+                loadingContainer.classList.add('hidden');
+                searchContainer.classList.remove('hidden');
+                queryEl.focus();
+
+                // Search as you type
+                let debounceTimer;
+                queryEl.addEventListener('input', () => {
+                    clearTimeout(debounceTimer);
+                    debounceTimer = setTimeout(performSearch, 100);
+                });
+
+            } catch (err) {
+                loadingContainer.innerHTML = `<div class="loading-text" style="color: #dc2626;">Error: ${err.message}</div>`;
+                console.error(err);
+            }
         }
 
         run();

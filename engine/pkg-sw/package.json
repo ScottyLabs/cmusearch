@@ -1,0 +1,11 @@
+{
+  "name": "engine",
+  "version": "0.1.0",
+  "files": [
+    "engine_bg.wasm",
+    "engine.js",
+    "engine.d.ts"
+  ],
+  "browser": "engine.js",
+  "types": "engine.d.ts"
+}
